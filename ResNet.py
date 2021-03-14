@@ -1,16 +1,14 @@
 import torch
 import torch.nn as nn
-import torchvision
-import torch.nn.functional as F
 from GCN_model import GraphConvolution
-from sklearn.neighbors import kneighbors_graph
-from graph_fun import process_graph
 import numpy as np
+import config
+import graph_building_functions
 
 print("PyTorch Version: ",torch.__version__)
-#print("Torchvision Version: ",torchvision.__version__)
 
 __all__ = ['ResNet50', 'ResNet101','ResNet152']
+
 
 def Conv1(in_planes, places, stride=2):
     return nn.Sequential(
@@ -19,6 +17,7 @@ def Conv1(in_planes, places, stride=2):
         nn.ReLU(inplace=True),
         nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
     )
+
 
 class Bottleneck(nn.Module):
     def __init__(self,in_places,places, stride=1,downsampling=False, expansion = 4):
@@ -55,9 +54,10 @@ class Bottleneck(nn.Module):
         out = self.relu(out)
         return out
 
+
 class ResNet(nn.Module):
-    def __init__(self,blocks, num_classes=6, expansion = 4):
-        super(ResNet,self).__init__()
+    def __init__(self, blocks, num_classes=6, expansion=4):
+        super(ResNet, self).__init__()
         self.expansion = expansion
 
         self.conv1 = Conv1(in_planes = 3, places= 64)
@@ -71,8 +71,8 @@ class ResNet(nn.Module):
 
         self.fc = nn.Linear(2048, 1024)
         self.fc1 = nn.Linear(1024, num_classes)
-        self.gc1 = GraphConvolution(1024, 512)
-        self.gc2 = GraphConvolution(512, num_classes)
+        self.gc1 = GraphConvolution(1024, 1024)
+        self.gc2 = GraphConvolution(1024, 1024)
 
         self.drop = nn.Dropout(0.5)
 
@@ -91,10 +91,8 @@ class ResNet(nn.Module):
 
         return nn.Sequential(*layers)
 
-
-    def forward(self, x, k):
+    def forward(self, x, labels=None, dis=None):
         x = self.conv1(x)
-
         x = self.layer1(x)
         x = self.layer2(x)
         x = self.layer3(x)
@@ -103,22 +101,25 @@ class ResNet(nn.Module):
         x = self.avgpool(x)
         x = x.view(x.size(0), -1)
         x = self.fc(x)
-        features = x.data.cpu().numpy()
-        res_outputs = self.fc1(x)
-        adj = kneighbors_graph(features, k).toarray()
-        A, D = process_graph(adj)
+        features = x
+        if labels is not None:
+            adj = graph_building_functions.knn_and_radius_graph(features, config.k, labels=labels)
+        else:
+            adj = graph_building_functions.knn_and_radius_graph(features, config.k, dis=dis)
+        A, D = graph_building_functions.process_graph_torch(adj)
         A, D = torch.tensor(A, dtype=torch.float32).cuda(), torch.tensor(D, dtype=torch.float32).cuda()
-        x = F.relu(self.gc1(x, A, D))
-        x = self.drop(x)
+        x = self.gc1(x, A, D)
         x = self.gc2(x, A, D)
-        return x, features, res_outputs
+        return x, dis
 
 
 def ResNet50(num_classes=4):
     return ResNet([3, 4, 6, 3],num_classes=num_classes)
 
+
 def ResNet101():
     return ResNet([3, 4, 23, 3])
+
 
 def ResNet152():
     return ResNet([3, 8, 36, 3])
